@@ -14,6 +14,9 @@ Edit configuration on /etc/myjp.conf:
 0.0.0.0:54321 google.com:443
 ```
 
+## Todo
+* Validate IP/HOST and PORT for config
+* Implement Viper for ENV variables
 
 ## Compile
 ```make build```
