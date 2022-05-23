@@ -9,6 +9,7 @@ import (
 
 	"github.com/dpanic/myjp/src/config"
 	"github.com/dpanic/myjp/src/logger"
+	"github.com/dpanic/myjp/src/pool"
 
 	"go.uber.org/zap"
 )
@@ -20,9 +21,12 @@ type Server struct {
 
 // New Server instance
 func NewServer(config *config.Config) *Server {
-	return &Server{
-		*config,
-	}
+	pool.Instance.Add(config)
+
+	server := Server{}
+	server.Config = *config
+
+	return &server
 }
 
 // Run starts listener and handles connections

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dpanic/myjp/src/logger"
+	"github.com/dpanic/myjp/src/pool"
 	"github.com/dpanic/myjp/src/stats"
 	"go.uber.org/zap"
 )
@@ -50,7 +51,7 @@ func New(host string, port int) (connection *Connection, err error) {
 	stats.Instance.IncConnections()
 	stats.Instance.AddConnectionID(id)
 
-	rConn, err := connectToRemoteHost(host, port)
+	rConn, err := pool.Instance.Get(host, port)
 	if err != nil {
 		logger.Log.Error("error in creating new connection",
 			zap.String("host", host),
@@ -65,22 +66,6 @@ func New(host string, port int) (connection *Connection, err error) {
 		host:  host,
 		port:  port,
 		rConn: rConn,
-	}
-
-	return
-}
-
-// connectToRemoteHost creates new connection to the pool
-func connectToRemoteHost(host string, port int) (rConn *net.TCPConn, err error) {
-	address := fmt.Sprintf("%s:%d", host, port)
-	rAddr, err := net.ResolveTCPAddr("tcp", address)
-	if err != nil {
-		return nil, err
-	}
-
-	rConn, err = net.DialTCP("tcp", nil, rAddr)
-	if err != nil {
-		return nil, err
 	}
 
 	return
