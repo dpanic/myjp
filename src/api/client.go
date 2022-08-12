@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"time"
 
 	"github.com/dpanic/myjp/src/config"
@@ -57,6 +58,7 @@ var (
 // handleRequest handles client request
 func (client *Client) handleRequest() {
 	defer func() {
+		runtime.GC()
 		(*client.conn).Close()
 	}()
 
