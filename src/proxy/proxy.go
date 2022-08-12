@@ -79,6 +79,7 @@ const (
 func (connection *Connection) SendWithContext() (err error) {
 	defer func() {
 		(*connection.Context).Done()
+		(*connection.rConn).Close()
 
 		stats.Instance.DecActiveConnections()
 		stats.Instance.DelConnectionID(connection.id)
