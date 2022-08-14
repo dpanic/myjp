@@ -62,7 +62,7 @@ func New(id, host string, port int) (connection *Connection, err error) {
 
 const (
 	maxServerRead = 256 << 10
-	maxIdleTime   = 30 * time.Second
+	maxIdleTime   = 7 * time.Second
 )
 
 // SendWithContext data to the server
