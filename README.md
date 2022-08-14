@@ -1,12 +1,12 @@
 # MYJP
 [![Go Report Card](https://goreportcard.com/badge/github.com/dpanic/myjp)](https://goreportcard.com/report/github.com/dpanic/myjp)
 
-My Jump Proxy is alternative for socat tcp4 redirect written in Go.
+My Jump Proxy is alternative for Socat TCP4 redirect written in Go.
 
 ## Features
 * Listen on TCP4 IP and PORT, redirect all traffic to remote TCP IP PORT
 * Multithreading
-* Connection pooling for remote servers
+* Connection pooling
 
 ## Configure
 Edit configuration on /etc/myjp.conf:

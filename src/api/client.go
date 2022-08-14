@@ -12,30 +12,38 @@ import (
 
 	"github.com/dpanic/myjp/src/config"
 	"github.com/dpanic/myjp/src/logger"
+	"github.com/dpanic/myjp/src/pool"
 	"github.com/dpanic/myjp/src/proxy"
 	"go.uber.org/zap"
 )
 
 // Client ...
 type Client struct {
+	id            string
+	born          time.Time
 	conn          *net.Conn
 	clientAddress string
 	serverAddress string
 	config.Config
-	input  chan []byte
-	output chan []byte
+	input    chan []byte
+	output   chan []byte
+	sections int
 }
 
 const (
-	maxChanSize   = 256 * 1024
-	maxClientRead = 256 * 1024
+	maxChanSize   = 256 << 10
+	maxClientRead = 256 << 10
 )
 
-func NewClient(conn *net.Conn, remoteHost string, remotePort int) (client *Client) {
+func NewClient(id string, conn *net.Conn, remoteHost string, remotePort int) (client *Client) {
+	go pool.Instance.Connect(id, remoteHost, remotePort)
+
 	clientAddress := (*conn).RemoteAddr().String()
 	serverAddress := fmt.Sprintf("%s:%d", remoteHost, remotePort)
 
 	client = &Client{
+		id:            id,
+		born:          time.Now(),
 		input:         make(chan []byte, maxChanSize),
 		output:        make(chan []byte, maxChanSize),
 		clientAddress: clientAddress,
@@ -52,30 +60,64 @@ func NewClient(conn *net.Conn, remoteHost string, remotePort int) (client *Clien
 }
 
 var (
-	maxConnectionLifetime = 120 * time.Second
+	maxConnectionLifetime = 300 * time.Second
 )
 
 // handleRequest handles client request
 func (client *Client) handleRequest() {
-	defer func() {
-		runtime.GC()
-		(*client.conn).Close()
-	}()
+	log := logger.Log.WithOptions(zap.Fields(
+		zap.String("clientAddress", client.clientAddress),
+		zap.String("serverAddress", client.serverAddress),
+	))
 
 	var (
-		reader = bufio.NewReader(*client.conn)
-		done   = make(chan bool)
+		reader           = bufio.NewReader(*client.conn)
+		shouldWorkClient = make(chan bool, 128)
+		shouldWorkProxy  = make(chan bool, 128)
+		connection       *proxy.Connection
 	)
+
+	defer func() {
+		runtime.GC()
+
+		// close client connection
+		(*client.conn).Close()
+
+		// turn off proxy
+		if connection != nil {
+			for i := 0; i < connection.Sections; i++ {
+				*connection.ShouldWork <- false
+			}
+		}
+
+		// turn of client workers
+		for i := 0; i < client.sections; i++ {
+			shouldWorkClient <- false
+		}
+
+		log.Info("handle request is done",
+			zap.Duration("duration", time.Since(client.born)),
+		)
+	}()
 
 	// create context
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
+
 	ctx, cancel := context.WithTimeout(ctx, maxConnectionLifetime)
 	defer cancel()
 
+	// client <-> proxy <-> server
 	// create jump proxy
 	go func() {
-		connection, err := proxy.New(client.RemoteHost, client.RemotePort)
+		defer func() {
+			for i := 0; i < client.sections; i++ {
+				shouldWorkClient <- false
+			}
+		}()
+
+		var err error
+		connection, err := proxy.New(client.id, client.RemoteHost, client.RemotePort)
 		if err != nil {
 			logger.Log.Error("error in creating remote connection",
 				zap.Error(err))
@@ -85,25 +127,20 @@ func (client *Client) handleRequest() {
 		connection.Context = &ctx
 		connection.Input = &client.input
 		connection.Output = &client.output
-		connection.Done = &done
+		connection.ShouldWork = &shouldWorkProxy
 
-		err = connection.SendWithContext()
-		if err != nil {
-			logger.Log.Error("error in sending data to remote proxy",
-				zap.Error(err),
-			)
-		}
+		connection.SendWithContext()
 	}()
 
-	log := logger.Log.WithOptions(zap.Fields(
-		zap.String("listenHost", client.ListenHost),
-		zap.Int("listenPort", client.ListenPort),
-		zap.String("RemoteHost", client.RemoteHost),
-		zap.Int("remotePort", client.RemotePort),
-	))
-
+	// client -> buffer
 	// read from client
 	go func() {
+		client.sections++
+
+		defer func() {
+			log.Debug("shutting down client worker reader")
+		}()
+
 		for {
 			line := make([]byte, maxClientRead)
 			n, err := reader.Read(line)
@@ -121,7 +158,11 @@ func (client *Client) handleRequest() {
 				msg bytes.Buffer
 			)
 
-			client.input <- line
+			select {
+			case client.input <- line:
+			case <-shouldWorkClient:
+				return
+			}
 
 			if logger.Debug == "true" {
 				msg.WriteString(fmt.Sprintf("Client Address: %q\n", client.clientAddress))
@@ -133,9 +174,17 @@ func (client *Client) handleRequest() {
 		}
 	}()
 
+	// client <- buffer
 	// send back to the client
+	client.sections++
+
 	for {
 		select {
+		case <-shouldWorkClient:
+			log.Debug("shutting down client worker output")
+
+			return
+
 		case resp := <-client.output:
 			var (
 				msg bytes.Buffer
@@ -159,7 +208,7 @@ func (client *Client) handleRequest() {
 
 		case <-ctx.Done():
 			log.Debug("context is done")
-			done <- true
+
 			return
 		}
 	}

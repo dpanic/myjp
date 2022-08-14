@@ -3,8 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"fmt"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -21,37 +20,26 @@ var (
 )
 
 type Connection struct {
-	rConn *net.TCPConn
-	id    string
-	host  string
-	port  int
-
-	Context *context.Context
-	Done    *chan bool
-	Input   *chan []byte
-	Output  *chan []byte
-}
-
-// genID generates random ID
-func genID() string {
-	raw := fmt.Sprintf("%v", time.Now().UnixNano())
-
-	h := sha256.New()
-	h.Write([]byte(raw))
-	bs := string(h.Sum(nil))
-
-	return fmt.Sprintf("%x", bs[0:7])
+	rConn        *net.TCPConn
+	id           string
+	host         string
+	port         int
+	Sections     int
+	mutex        sync.Mutex
+	lastActivity time.Time
+	Context      *context.Context
+	ShouldWork   *chan bool
+	Input        *chan []byte
+	Output       *chan []byte
 }
 
 // creates new connection
-func New(host string, port int) (connection *Connection, err error) {
-	id := genID()
-
+func New(id, host string, port int) (connection *Connection, err error) {
 	stats.Instance.IncActiveConnections()
 	stats.Instance.IncConnections()
 	stats.Instance.AddConnectionID(id)
 
-	rConn, err := pool.Instance.Get(host, port)
+	rConn, err := pool.Instance.Get(id, host, port)
 	if err != nil {
 		logger.Log.Error("error in creating new connection",
 			zap.String("host", host),
@@ -62,38 +50,64 @@ func New(host string, port int) (connection *Connection, err error) {
 	}
 
 	connection = &Connection{
-		id:    id,
-		host:  host,
-		port:  port,
-		rConn: rConn,
+		id:           id,
+		host:         host,
+		port:         port,
+		rConn:        rConn,
+		lastActivity: time.Now(),
 	}
 
 	return
 }
 
 const (
-	maxServerRead = 256 * 1024
+	maxServerRead = 256 << 10
+	maxIdleTime   = 7 * time.Second
 )
 
 // SendWithContext data to the server
 func (connection *Connection) SendWithContext() (err error) {
-	defer func() {
-		(*connection.Context).Done()
-
-		stats.Instance.DecActiveConnections()
-		stats.Instance.DelConnectionID(connection.id)
-	}()
-
 	log := logger.Log.WithOptions(zap.Fields(
 		zap.String("id", connection.id),
 		zap.String("host", connection.host),
 		zap.Int("port", connection.port),
 	))
 
-	// send client data to remote server
+	defer func() {
+		log.Debug("shutting down proxy")
+
+		(*connection.Context).Done()
+
+		// turn off server connection
+		(*connection.rConn).Close()
+
+		for i := 0; i < connection.Sections; i++ {
+			*connection.ShouldWork <- false
+		}
+
+		stats.Instance.DecActiveConnections()
+		stats.Instance.DelConnectionID(connection.id)
+	}()
+
+	// client -> proxy -> server
 	go func() {
+		connection.Sections++
+
+		defer func() {
+			log.Debug("shutting down proxy worker client read")
+		}()
+
 		for {
-			data := <-*connection.Input
+			var data []byte
+			select {
+			case data = <-*connection.Input:
+			case <-*connection.ShouldWork:
+				return
+			}
+
+			connection.mutex.Lock()
+			connection.lastActivity = time.Now()
+			connection.mutex.Unlock()
 
 			_, err := connection.rConn.Write(data)
 
@@ -108,8 +122,15 @@ func (connection *Connection) SendWithContext() (err error) {
 		}
 	}()
 
+	// server -> proxy -> client
 	// read from server and send back to client
 	go func() {
+		defer func() {
+			log.Debug("shutting down proxy worker server read")
+		}()
+
+		connection.Sections++
+
 		var (
 			reader = bufio.NewReader(connection.rConn)
 		)
@@ -117,6 +138,10 @@ func (connection *Connection) SendWithContext() (err error) {
 		for {
 			line := make([]byte, maxServerRead)
 			total, err := reader.Read(line)
+
+			connection.mutex.Lock()
+			connection.lastActivity = time.Now()
+			connection.mutex.Unlock()
 
 			if err != nil && err != io.EOF {
 				return
@@ -135,6 +160,25 @@ func (connection *Connection) SendWithContext() (err error) {
 		}
 	}()
 
-	<-*connection.Done
-	return
+	isTimeouted := false
+	connection.Sections++
+	for {
+		select {
+		case <-*connection.ShouldWork:
+			return
+
+		case <-time.After(time.Second):
+			connection.mutex.Lock()
+			if time.Since(connection.lastActivity) > maxIdleTime {
+				isTimeouted = true
+			}
+			connection.mutex.Unlock()
+
+			if isTimeouted {
+				log.Warn("connection to remote server timeouted")
+				err = errors.New("connection to remote server timeouted")
+				return
+			}
+		}
+	}
 }
