@@ -6,53 +6,55 @@ import (
 	"net"
 	"time"
 
-	"github.com/dpanic/myjp/src/config"
 	"github.com/dpanic/myjp/src/logger"
 	"go.uber.org/zap"
 )
 
 type pool struct {
-	servers map[string]chan *net.TCPConn
+	connections map[string]chan server
 }
 
 var (
 	Instance = pool{
-		servers: make(map[string]chan *net.TCPConn, 0),
+		connections: make(map[string]chan server, 0),
 	}
 )
 
-func (p *pool) getTag(host string, port int) (tag string) {
-	tag = fmt.Sprintf("%s:%d", host, port)
+func (p *pool) getTag(id, host string, port int) (tag string) {
+	tag = fmt.Sprintf("%s:%s:%d", id, host, port)
 	return
 }
 
-// add server config to the pool
-func (p *pool) Add(config *config.Config) {
-	tag := p.getTag(config.RemoteHost, config.RemotePort)
-	Instance.servers[tag] = make(chan *net.TCPConn, 2)
-
-	go p.Connect(config.RemoteHost, config.RemotePort)
+type server struct {
+	id   string
+	conn *net.TCPConn
 }
 
 // Connect adds connections to the pool
-func (p *pool) Connect(host string, port int) {
+func (p *pool) Connect(id, host string, port int) {
+	tag := p.getTag(id, host, port)
+	if _, ok := p.connections[tag]; !ok {
+		p.connections[tag] = make(chan server, 10)
+	}
+
 	log := logger.Log.WithOptions(zap.Fields(
 		zap.String("host", host),
 		zap.Int("port", port),
 	))
-	tag := p.getTag(host, port)
 
-	for {
-		conn, err := p.connectToRemoteHost(host, port)
-		if err != nil {
-			log.Error("error in connecting to remote host",
-				zap.Error(err),
-			)
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		log.Info("created new connection to remote host")
-		p.servers[tag] <- conn
+	conn, err := p.connectToRemoteHost(host, port)
+	if err != nil {
+		log.Error("error in connecting to remote host",
+			zap.Error(err),
+		)
+		time.Sleep(2 * time.Second)
+		return
+	}
+
+	log.Info("created new connection to remote host")
+	p.connections[tag] <- server{
+		id:   id,
+		conn: conn,
 	}
 }
 
@@ -75,23 +77,30 @@ func (p *pool) connectToRemoteHost(host string, port int) (rConn *net.TCPConn, e
 }
 
 // Get host:port *net.TCPConn from connection pool
-func (p *pool) Get(host string, port int) (rConn *net.TCPConn, err error) {
-	tag := p.getTag(host, port)
+func (p *pool) Get(id, host string, port int) (rConn *net.TCPConn, err error) {
+	tag := p.getTag(id, host, port)
 	log := logger.Log.WithOptions(zap.Fields(
 		zap.String("host", host),
 		zap.Int("port", port),
 	))
 
-	if val, ok := p.servers[tag]; ok {
+	if val, ok := p.connections[tag]; ok {
 		select {
-		case rConn = <-val:
-			log.Info("got connection from pool")
+
+		case s := <-val:
+			log.Info("got connection from pool",
+				zap.String("id", s.id),
+			)
+
+			rConn = s.conn
 			return
+
 		case <-time.After(5 * time.Second):
 			err = errors.New("no available connection for host:port")
 			log.Error("error in getting host from pool",
 				zap.Error(err),
 			)
+
 			return
 		}
 	}

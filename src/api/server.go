@@ -9,7 +9,6 @@ import (
 
 	"github.com/dpanic/myjp/src/config"
 	"github.com/dpanic/myjp/src/logger"
-	"github.com/dpanic/myjp/src/pool"
 
 	"go.uber.org/zap"
 )
@@ -21,8 +20,6 @@ type Server struct {
 
 // New Server instance
 func NewServer(config *config.Config) *Server {
-	pool.Instance.Add(config)
-
 	server := Server{}
 	server.Config = *config
 
@@ -113,7 +110,10 @@ func (server *Server) Run() {
 			zap.String("ip", conn.RemoteAddr().String()),
 		)
 
-		client := NewClient(&conn, server.RemoteHost, server.RemotePort)
-		go client.handleRequest()
+		go func() {
+			id := genID()
+			client := NewClient(id, &conn, server.RemoteHost, server.RemotePort)
+			client.handleRequest()
+		}()
 	}
 }
