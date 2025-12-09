@@ -13,12 +13,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// Server definition
+// Server represents a TCP server that listens for client connections and proxies them
+// to a remote database server.
 type Server struct {
-	config.Config
+	config.Config // Embedded configuration with listen and remote host/port settings
 }
 
-// New Server instance
+// NewServer creates a new Server instance with the provided configuration.
 func NewServer(config *config.Config) *Server {
 	server := Server{}
 	server.Config = *config
@@ -26,7 +27,9 @@ func NewServer(config *config.Config) *Server {
 	return &server
 }
 
-// Run starts listener and handles connections
+// Run starts the TCP listener and handles incoming client connections.
+// It sets up signal handlers for graceful shutdown (SIGHUP, SIGINT, SIGTERM, SIGQUIT)
+// and spawns a new goroutine for each incoming connection.
 func (server *Server) Run() {
 	var (
 		events = make(chan os.Signal, 1)

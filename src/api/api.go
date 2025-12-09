@@ -1,3 +1,5 @@
+// Package api provides the HTTP API server and client handling for the MySQL/MariaDB proxy.
+// It manages server lifecycle, client connections, and proxying requests to remote database servers.
 package api
 
 import (
@@ -10,6 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// Run loads all configurations and starts a server instance for each configuration.
+// It blocks indefinitely after starting all servers.
 func Run() {
 	configs, err := config.LoadAll()
 
@@ -27,7 +31,8 @@ func Run() {
 	select {}
 }
 
-// genID generates random ID
+// genID generates a unique identifier based on the current nanosecond timestamp.
+// It returns a truncated SHA-256 hash as a hexadecimal string.
 func genID() string {
 	raw := fmt.Sprintf("%v", time.Now().UnixNano())
 

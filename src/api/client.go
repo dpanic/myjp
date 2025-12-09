@@ -17,24 +17,29 @@ import (
 	"go.uber.org/zap"
 )
 
-// Client ...
+// Client represents a connected client with its connection state and communication channels.
+// It manages the bidirectional communication between the client and the remote database server.
 type Client struct {
-	id            string
-	born          time.Time
-	conn          *net.Conn
-	clientAddress string
-	serverAddress string
-	config.Config
-	input    chan []byte
-	output   chan []byte
-	sections int
+	id            string      // Unique identifier for this client connection
+	born          time.Time   // Timestamp when the client connection was established
+	conn          *net.Conn   // Network connection to the client
+	clientAddress string      // Remote address of the connected client
+	serverAddress string      // Address of the remote database server
+	config.Config             // Embedded configuration for remote host/port
+	input         chan []byte // Channel for incoming data from client
+	output        chan []byte // Channel for outgoing data to client
+	sections      int         // Counter for active goroutine sections
 }
 
 const (
-	maxChanSize   = 256 << 10
+	// maxChanSize is the maximum buffer size for input/output channels.
+	maxChanSize = 256 << 10
+	// maxClientRead is the maximum bytes to read from client in one operation.
 	maxClientRead = 256 << 10
 )
 
+// NewClient creates a new Client instance and initiates a connection to the remote host.
+// It sets up input/output channels and configures the client with remote host information.
 func NewClient(id string, conn *net.Conn, remoteHost string, remotePort int) (client *Client) {
 	go pool.Instance.Connect(id, remoteHost, remotePort)
 
@@ -60,10 +65,13 @@ func NewClient(id string, conn *net.Conn, remoteHost string, remotePort int) (cl
 }
 
 var (
+	// maxConnectionLifetime is the maximum duration a connection can remain active.
 	maxConnectionLifetime = 300 * time.Second
 )
 
-// handleRequest handles client request
+// handleRequest manages the bidirectional data flow between the client and remote server.
+// It creates a proxy connection, reads data from the client, and sends responses back.
+// The function handles graceful shutdown and cleanup of all resources.
 func (client *Client) handleRequest() {
 	log := logger.Log.WithOptions(zap.Fields(
 		zap.String("clientAddress", client.clientAddress),

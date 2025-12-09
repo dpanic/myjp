@@ -1,3 +1,5 @@
+// Package config handles loading and parsing of myjp configuration files.
+// It reads proxy mappings from /etc/myjp.conf that define listen and remote host/port pairs.
 package config
 
 import (
@@ -12,17 +14,21 @@ import (
 )
 
 const (
+	// configFileLoc is the default path to the myjp configuration file.
 	configFileLoc = "/etc/myjp.conf"
 )
 
+// Config represents a single proxy configuration with listen and remote host/port pairs.
 type Config struct {
-	ListenHost string
-	ListenPort int
-	RemoteHost string
-	RemotePort int
+	ListenHost string // Host address to listen on for incoming connections
+	ListenPort int    // Port to listen on for incoming connections
+	RemoteHost string // Remote database server host to proxy to
+	RemotePort int    // Remote database server port to proxy to
 }
 
-// LoadAll load all configs
+// LoadAll reads and parses all proxy configurations from the config file.
+// Each line in the config file should be in format: listen_host:listen_port remote_host:remote_port
+// Returns a slice of Config pointers and any error encountered.
 func LoadAll() (configs []*Config, err error) {
 	file, err := os.Open(configFileLoc)
 	if err != nil {

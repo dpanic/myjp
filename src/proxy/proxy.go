@@ -1,3 +1,5 @@
+// Package proxy provides functionality for proxying data between clients and remote database servers.
+// It handles bidirectional communication, connection timeouts, and graceful shutdown.
 package proxy
 
 import (
@@ -16,24 +18,29 @@ import (
 )
 
 var (
+	// mutex protects concurrent access to shared proxy resources.
 	mutex = &sync.Mutex{}
 )
 
+// Connection represents a proxy connection to a remote database server.
+// It manages the bidirectional data flow and tracks connection state.
 type Connection struct {
-	rConn        *net.TCPConn
-	id           string
-	host         string
-	port         int
-	Sections     int
-	mutex        sync.Mutex
-	lastActivity time.Time
-	Context      *context.Context
-	ShouldWork   *chan bool
-	Input        *chan []byte
-	Output       *chan []byte
+	rConn        *net.TCPConn      // TCP connection to the remote server
+	id           string            // Unique identifier for this connection
+	host         string            // Remote server host
+	port         int               // Remote server port
+	Sections     int               // Counter for active goroutine sections
+	mutex        sync.Mutex        // Mutex for protecting lastActivity
+	lastActivity time.Time         // Timestamp of last activity on this connection
+	Context      *context.Context  // Context for cancellation
+	ShouldWork   *chan bool        // Channel for signaling shutdown
+	Input        *chan []byte      // Channel for incoming data from client
+	Output       *chan []byte      // Channel for outgoing data to client
 }
 
-// creates new connection
+// New creates a new proxy Connection to the specified host and port.
+// It retrieves a connection from the pool and updates connection statistics.
+// Returns the Connection and any error encountered.
 func New(id, host string, port int) (connection *Connection, err error) {
 	stats.Instance.IncActiveConnections()
 	stats.Instance.IncConnections()
@@ -61,11 +68,16 @@ func New(id, host string, port int) (connection *Connection, err error) {
 }
 
 const (
+	// maxServerRead is the maximum bytes to read from server in one operation.
 	maxServerRead = 256 << 10
-	maxIdleTime   = 60 * time.Second
+	// maxIdleTime is the maximum time a connection can be idle before timeout.
+	maxIdleTime = 60 * time.Second
 )
 
-// SendWithContext data to the server
+// SendWithContext manages the bidirectional data flow between client and remote server.
+// It spawns goroutines to handle sending data to the server and receiving responses.
+// The function monitors for idle timeout and handles graceful shutdown.
+// Returns any error encountered during communication.
 func (connection *Connection) SendWithContext() (err error) {
 	log := logger.Log.WithOptions(zap.Fields(
 		zap.String("id", connection.id),

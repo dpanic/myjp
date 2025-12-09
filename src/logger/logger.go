@@ -1,3 +1,5 @@
+// Package logger provides logging functionality for myjp using the zap logger.
+// It includes both structured logging and a file-based query logging queue.
 package logger
 
 import (
@@ -10,7 +12,9 @@ import (
 )
 
 var (
-	Log   *zap.Logger
+	// Log is the global zap logger instance used throughout the application.
+	Log *zap.Logger
+	// Debug controls whether debug logging is enabled (set via DEBUG environment variable).
 	Debug = os.Getenv("DEBUG")
 )
 
@@ -19,7 +23,9 @@ func init() {
 	defer Log.Sync()
 }
 
-// configure will return instance of zap logger configuration, configured to be verbose or to use JSON formatting
+// Setup creates and configures a new zap logger instance.
+// If verbose is true, the logger will output debug-level messages.
+// Returns the configured logger and any error encountered during setup.
 func Setup(verbose bool) (logger *zap.Logger, err error) {
 	level := zapcore.InfoLevel
 	if verbose {
@@ -67,10 +73,12 @@ func Setup(verbose bool) (logger *zap.Logger, err error) {
 }
 
 const (
+	// fileLoc is the path to the query log file.
 	fileLoc = "logs/queries.log"
 )
 
 var (
+	// queue is a buffered channel for asynchronous log message writing.
 	queue = make(chan string, 1024)
 )
 
@@ -83,7 +91,8 @@ func init() {
 	}()
 }
 
-// Enqueue sets message for writing to disk
+// Enqueue adds a message to the logging queue for asynchronous writing to disk.
+// If the queue is full, it triggers an immediate flush before adding the message.
 func Enqueue(msg string) {
 	select {
 	case queue <- msg:
@@ -93,6 +102,8 @@ func Enqueue(msg string) {
 	}
 }
 
+// flushQueue writes all queued messages to the log file.
+// It opens the file in append mode, writes all pending messages, and closes the file.
 func flushQueue() {
 	f, err := os.OpenFile(fileLoc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -106,6 +117,8 @@ func flushQueue() {
 	}
 }
 
+// File writes data to a file at the specified location.
+// It opens the file in append mode, creating it if it doesn't exist.
 func File(fileLoc string, data string) (err error) {
 	f, err := os.OpenFile(fileLoc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
